@@ -4,16 +4,16 @@
 
 # Web Framework
 fastapi==0.104.1
-python-multipart==0.0.6
+python-multipart
 uvicorn[standard]==0.24.0
 
 # AI Features
 rembg==2.0.55
 mediapipe==0.10.13
-onnxruntime==1.17.0
+onnxruntime
 
 # Image Processing
 pillow
 pillow-heif
-opencv-python-headless==4.8.1.78
-numpy==1.24.4
+opencv-python-headless<4.9
+numpy<2
