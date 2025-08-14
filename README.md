@@ -9,6 +9,18 @@ Ref:
 
 https://abc-id-photo.vercel.app
 
+_Screenshots:_
+
+<kbd><img src="docs/demo-1a-step-1.jpeg" alt="step-1" style="border: 1px solid green;"></kbd>
+
+<kbd><img src="docs/demo-1a-step-2.jpeg" alt="step-2" style="border: 1px solid green;"></kbd>
+
+<kbd><img src="docs/demo-4u-step-3.jpeg" alt="step-3" style="border: 1px solid green;"></kbd>
+
+<kbd><img src="docs/demo-4u-step-4.jpeg" alt="step-4" style="border: 1px solid green;"></kbd>
+
+<kbd><img src="docs/demo-4u-step-5-output-sheet.jpeg" alt="step-5" style="border: 1px solid green;"></kbd>
+
 ## Running Locally
 
 ```bash
