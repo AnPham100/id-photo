@@ -7,6 +7,9 @@ fastapi==0.104.1
 python-multipart
 uvicorn[standard]==0.24.0
 
+# AI/ML app demo
+streamlit
+
 # AI Features
 rembg==2.0.55
 mediapipe==0.10.13

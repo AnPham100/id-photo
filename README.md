@@ -2,12 +2,21 @@
 
 Ref: 
 - https://github.com/GavinMorganField/id-photo-maker
-- Vercel's Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
-- Deploy the example using [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=vercel-examples).
+- https://bgremover.streamlit.app
 
-## Demo
+## Demo 2: ML app in Streamlit
 
-https://abc-id-photo.vercel.app
+URL: https://id-photo.streamlit.app
+
+_Screenshots:_
+
+<kbd><img src="docs/demo-streamlit.jpeg" alt="step-1" style="border: 1px solid green;"></kbd>
+
+## Demo 1: Webapp in Vercel
+
+URL: https://abc-id-photo.vercel.app
+
+> Status: Failed. `Error: Size of uploaded file exceeds 300MB`
 
 _Screenshots:_
 
@@ -21,7 +30,7 @@ _Screenshots:_
 
 <kbd><img src="docs/demo-4u-step-5-output-sheet.jpeg" alt="step-5" style="border: 1px solid green;"></kbd>
 
-## Running Locally
+### Running Locally
 
 ```bash
 npm i -g vercel
@@ -29,3 +38,8 @@ vercel dev
 ```
 
 Your application is now available at `http://localhost:3000`.
+
+### Docs
+
+- Vercel's Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
+- Deploy the example using [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=vercel-examples).
