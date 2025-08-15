@@ -6,7 +6,16 @@ from PIL import Image, ImageDraw, ImageOps
 import pillow_heif
 import io
 import rembg
-import cv2
+
+# Import cv2 with error handling for cloud deployment
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError as e:
+    st.warning("⚠️ OpenCV not available. Some advanced features may be limited.")
+    CV2_AVAILABLE = False
+    cv2 = None
+
 import mediapipe as mp
 import json
 import base64
@@ -15,6 +24,32 @@ import os
 
 # Register HEIF support with Pillow
 pillow_heif.register_heif_opener()
+
+def is_cv2_available():
+    """Check if OpenCV is available for advanced features"""
+    return CV2_AVAILABLE and cv2 is not None
+
+def cv2_feature_example(image):
+    """Example function showing how to use cv2 when available"""
+    if not is_cv2_available():
+        st.warning("⚠️ This feature requires OpenCV which is not available in this environment.")
+        return image
+    
+    # Example: Convert PIL to OpenCV format for cv2 operations
+    try:
+        # Convert PIL Image to OpenCV format (BGR)
+        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        
+        # Example cv2 operation (blur)
+        blurred = cv2.GaussianBlur(cv_image, (15, 15), 0)
+        
+        # Convert back to PIL format (RGB)
+        result = cv2.cvtColor(blurred, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(result)
+        
+    except Exception as e:
+        st.error(f"OpenCV operation failed: {e}")
+        return image
 
 # Configure Streamlit page
 st.set_page_config(
