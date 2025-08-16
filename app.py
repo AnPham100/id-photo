@@ -25,6 +25,54 @@ import os
 # Register HEIF support with Pillow
 pillow_heif.register_heif_opener()
 
+def format_passport_option(key, spec):
+    """Format passport option with country flag"""
+    country_flags = {
+        "US": "🇺🇸",
+        "EU": "🇪🇺",
+        "VN": "🇻🇳"
+    }
+    flag = country_flags.get(key, "🌍")
+    
+    # Add size information for better UX
+    name = spec['name']
+    if 'width_mm' in spec and 'height_mm' in spec:
+        size_info = f" ({spec['width_mm']}×{spec['height_mm']}mm)"
+    elif 'width_inch' in spec and 'height_inch' in spec:
+        size_info = f" ({spec['width_inch']}×{spec['height_inch']}″)"
+    else:
+        size_info = ""
+    
+    return f"{flag} {name}"
+
+def format_color_option(color_key, color_value):
+    """Format color option with inline color box"""
+    color_map = {
+        "white": "#FFFFFF",
+        "light_gray": "#B8B3B2", 
+        "light_blue": "#E6F3FF",
+        "light_red": "#F5E6E8"
+    }
+    
+    if color_key == "custom":
+        return "🎨 Custom"
+    
+    # Get the color hex value and name
+    hex_color = color_map.get(color_key, "#FFFFFF")
+    color_name = color_key.replace('_', ' ').title()
+    
+    # Use color block emoji that closely matches the actual color
+    if color_key == "white":
+        return "⬜ White"
+    elif color_key == "light_gray":
+        return "⬜ Light Gray"  # Using light square for light gray
+    elif color_key == "light_blue":
+        return "🟦 Light Blue"
+    elif color_key == "light_red":
+        return "🟥 Light Red"
+    
+    return f"🎨 {color_name}"
+
 def is_cv2_available():
     """Check if OpenCV is available for advanced features"""
     return CV2_AVAILABLE and cv2 is not None
@@ -125,6 +173,18 @@ PHOTO_SHEET_SPECS = {
     "margin_mm": 3,    # 3mm margin on all sides
     "margin_px": 35    # 3mm ÷ 25.4 × 300 DPI = 35px
 }
+
+def save_image_with_dpi(image, format='JPEG', dpi=300, quality=95):
+    """Save image with proper DPI metadata for correct physical dimensions"""
+    img_byte_arr = io.BytesIO()
+    
+    # Set DPI metadata
+    if format.upper() == 'PNG':
+        image.save(img_byte_arr, format='PNG', dpi=(dpi, dpi))
+    else:
+        image.save(img_byte_arr, format='JPEG', dpi=(dpi, dpi), quality=quality)
+    
+    return img_byte_arr.getvalue()
 
 def detect_faces(image):
     """Detect faces in image using MediaPipe"""
@@ -477,7 +537,7 @@ def main():
         ### 🎯 Processing Options:
         
         1. **🎭 Remove Background**: Creates a transparent PNG background for your image
-        2. **🎨 Remove & Refill Background**: Removes background and adds solid color (white, blue, gray, or custom)
+        2. **🎨 Remove & Refill Background**: Removes background and adds solid color (white, light blue, light red, light gray, or custom)
         3. **✂️ Crop to Passport Size**: Crops image to passport dimensions using AI face detection
         4. **📋 Complete Passport Photo**: Full processing + creates printable photo sheet (recommended)
         
@@ -517,18 +577,41 @@ def main():
         
         # Background color selection
         if processing_type in ["refill_bg", "passport_photo"]:
-            bg_color_option = st.selectbox(
+            # Create color options with visual indicators
+            color_options = ["white", "light_gray", "light_blue", "light_red", "custom"]
+            formatted_colors = [format_color_option(color, None) for color in color_options]
+            
+            bg_color_selection = st.selectbox(
                 "Background Color",
-                ["white", "light_blue", "light_gray", "custom"]
+                options=range(len(color_options)),
+                format_func=lambda x: formatted_colors[x],
+                help="Choose background color for your passport photo"
             )
+            bg_color_option = color_options[bg_color_selection]
+            
+            # Show color preview below dropdown
+            color_map = {
+                "white": "#FFFFFF",
+                "light_gray": "#B8B3B2",
+                "light_blue": "#E6F3FF",
+                "light_red": "#F5E6E8"
+            }
+            
+            if bg_color_option != "custom":
+                preview_color = color_map[bg_color_option]
+                st.markdown(
+                    f'<div style="background-color: {preview_color}; border: 1px solid #ccc; height: 30px; width: 100%; border-radius: 5px; margin-top: 5px;"></div>',
+                    unsafe_allow_html=True
+                )
             
             if bg_color_option == "custom":
                 bg_color = st.color_picker("Pick a color", "#FFFFFF")
             else:
                 color_map = {
-                    "white": "#FFFFFF",
-                    "light_blue": "#E6F3FF", 
-                    "light_gray": "#F5F5F5"
+                    "white": "#FFFFFF",         # US, VN regulation white
+                    "light_gray": "#B8B3B2",    # EU regulation gray
+                    "light_blue": "#E6F3FF",
+                    "light_red": "#F5E6E8"
                 }
                 bg_color = color_map[bg_color_option]
         else:
@@ -539,7 +622,7 @@ def main():
             passport_type = st.selectbox(
                 "Passport Type",
                 options=list(PASSPORT_SPECS.keys()),
-                format_func=lambda x: PASSPORT_SPECS[x]["name"]
+                format_func=lambda x: format_passport_option(x, PASSPORT_SPECS[x])
             )
         else:
             passport_type = "US"
@@ -600,6 +683,7 @@ def main():
                             st.session_state.processed_image = processed_image
                             st.session_state.faces = faces
                             st.session_state.processing_type = processing_type
+                            st.session_state.passport_type = passport_type  # Store passport type for DPI
                             st.session_state.sheet_image = sheet_image
                             st.success("✅ Image processed successfully!")
                             
@@ -617,6 +701,7 @@ def main():
             processed_image = st.session_state.processed_image
             faces = st.session_state.faces
             sheet_image = getattr(st.session_state, 'sheet_image', None)
+            stored_passport_type = getattr(st.session_state, 'passport_type', 'US')
             
             # Display processed image
             st.image(processed_image, caption="Single Passport Photo", use_container_width=True)
@@ -630,16 +715,16 @@ def main():
                 st.warning("⚠️ No faces detected")
             
             # Download button for single image
-            img_byte_arr = io.BytesIO()
             if processed_image.mode == 'RGBA':
-                processed_image.save(img_byte_arr, format='PNG')
+                img_byte_arr = save_image_with_dpi(processed_image, format='PNG', dpi=300)
                 file_ext = "png"
             else:
-                processed_image.save(img_byte_arr, format='JPEG', quality=95)
+                # Get DPI from passport specifications
+                spec_dpi = PASSPORT_SPECS.get(stored_passport_type, {}).get('dpi', 300)
+                img_byte_arr = save_image_with_dpi(processed_image, format='JPEG', dpi=spec_dpi, quality=95)
                 file_ext = "jpg"
-            img_byte_arr = img_byte_arr.getvalue()
             
-            filename = f"passport_single_{passport_type}.{file_ext}"
+            filename = f"passport_single_{stored_passport_type}.{file_ext}"
             
             st.download_button(
                 label="📥 Download Single Photo",
@@ -656,11 +741,10 @@ def main():
                 st.image(sheet_image, caption="Photo Sheet (10×15cm)", use_container_width=True)
                 
                 # Download button for photo sheet
-                sheet_byte_arr = io.BytesIO()
-                sheet_image.save(sheet_byte_arr, format='JPEG', quality=95)
-                sheet_byte_arr = sheet_byte_arr.getvalue()
+                sheet_dpi = PHOTO_SHEET_SPECS['dpi']
+                sheet_byte_arr = save_image_with_dpi(sheet_image, format='JPEG', dpi=sheet_dpi, quality=95)
                 
-                sheet_filename = f"passport_sheet_{passport_type}.jpg"
+                sheet_filename = f"passport_sheet_{stored_passport_type}.jpg"
                 
                 st.download_button(
                     label="📥 Download Photo Sheet",
@@ -672,7 +756,7 @@ def main():
             
             # Image specifications
             if st.session_state.processing_type in ["crop_face", "passport_photo"]:
-                spec = PASSPORT_SPECS[passport_type]
+                spec = PASSPORT_SPECS[stored_passport_type]
                 # Determine size display format
                 if 'width_mm' in spec:
                     size_display = f"{spec['width_mm']}×{spec['height_mm']} mm"
