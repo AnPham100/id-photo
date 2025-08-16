@@ -10,7 +10,7 @@ URL: https://id-photo.streamlit.app
 
 _Screenshots:_
 
-<kbd><img src="docs/demo-streamlit-v2-us.jpeg" alt="step-1" style="border: 1px solid green;"></kbd>
+<kbd><img src="docs/demo-streamlit-v3-custom_3x4-input-view.jpeg" alt="streamlit" style="border: 1px solid green;"></kbd>
 
 ## Demo 1: Webapp in Vercel
 

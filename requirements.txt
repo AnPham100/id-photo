@@ -9,6 +9,7 @@ uvicorn[standard]==0.24.0
 
 # AI/ML app demo
 streamlit
+streamlit-cropper
 
 # AI Features
 rembg==2.0.55

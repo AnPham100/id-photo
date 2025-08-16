@@ -7,6 +7,7 @@ import pillow_heif
 import io
 import rembg
 import mediapipe as mp
+from datetime import datetime
 
 # Import cv2 with error handling for cloud deployment
 try:
@@ -16,6 +17,14 @@ except ImportError as e:
     st.warning("⚠️ OpenCV not available. Some advanced features may be limited.")
     CV2_AVAILABLE = False
     cv2 = None
+
+# Import streamlit-cropper with error handling
+try:
+    from streamlit_cropper import st_cropper
+    CROPPER_AVAILABLE = True
+except ImportError as e:
+    st.warning("⚠️ streamlit-cropper not available. Manual crop feature will be limited.")
+    CROPPER_AVAILABLE = False
 
 # Register HEIF support with Pillow
 pillow_heif.register_heif_opener()
@@ -198,6 +207,86 @@ def detect_faces(image):
     except Exception as e:
         st.error(f"Face detection error: {str(e)}")
         return []
+
+def apply_manual_crop(image, crop_data):
+    """Apply manual crop based on crop coordinates"""
+    try:
+        x = crop_data['x']
+        y = crop_data['y']
+        width = crop_data['width']
+        height = crop_data['height']
+        
+        # Ensure crop coordinates are within image bounds
+        x = max(0, min(x, image.width - 1))
+        y = max(0, min(y, image.height - 1))
+        width = min(width, image.width - x)
+        height = min(height, image.height - y)
+        
+        # Crop the image
+        cropped_image = image.crop((x, y, x + width, y + height))
+        return cropped_image
+    except Exception as e:
+        st.error(f"Error applying manual crop: {str(e)}")
+        return image
+
+def resize_to_target_dimensions(image, target_width_px, target_height_px, method="fit"):
+    """
+    Resize image to target dimensions with different methods
+    
+    Args:
+        image: PIL Image
+        target_width_px: Target width in pixels
+        target_height_px: Target height in pixels
+        method: Resize method - "fit" (preserve aspect, may have padding), "fill" (stretch), "crop" (preserve aspect, crop excess)
+    """
+    try:
+        if method == "fit":
+            # Preserve aspect ratio, fit within target dimensions (may add padding)
+            image.thumbnail((target_width_px, target_height_px), Image.Resampling.LANCZOS)
+            
+            # Create white background with target dimensions
+            result = Image.new('RGB', (target_width_px, target_height_px), 'white')
+            
+            # Center the resized image on the background
+            x = (target_width_px - image.width) // 2
+            y = (target_height_px - image.height) // 2
+            
+            if image.mode == 'RGBA':
+                result.paste(image, (x, y), image)
+            else:
+                result.paste(image, (x, y))
+            
+            return result
+            
+        elif method == "fill":
+            # Stretch to exact dimensions (may distort aspect ratio)
+            return image.resize((target_width_px, target_height_px), Image.Resampling.LANCZOS)
+            
+        elif method == "crop":
+            # Preserve aspect ratio, crop excess to fit exactly
+            img_ratio = image.width / image.height
+            target_ratio = target_width_px / target_height_px
+            
+            if img_ratio > target_ratio:
+                # Image is wider than target, crop width
+                new_width = int(image.height * target_ratio)
+                x = (image.width - new_width) // 2
+                cropped = image.crop((x, 0, x + new_width, image.height))
+            else:
+                # Image is taller than target, crop height
+                new_height = int(image.width / target_ratio)
+                y = (image.height - new_height) // 2
+                cropped = image.crop((0, y, image.width, y + new_height))
+            
+            return cropped.resize((target_width_px, target_height_px), Image.Resampling.LANCZOS)
+        
+        else:
+            # Default to fill method
+            return image.resize((target_width_px, target_height_px), Image.Resampling.LANCZOS)
+            
+    except Exception as e:
+        st.error(f"Error resizing image: {str(e)}")
+        return image
 
 def remove_background(image, tight_crop=True):
     """Remove background from image with sharp cut option"""
@@ -405,30 +494,54 @@ def crop_to_passport_size(image, passport_type, faces=None):
         st.error(f"Cropping error: {str(e)}")
         return image
 
-def create_photo_sheet(passport_image_pil, passport_type):
+def create_photo_sheet(passport_image_pil, passport_type, manual_crop_data=None):
     """Create a sheet of passport photos on 10cm × 15cm format"""
     try:
-        if passport_type not in PASSPORT_SPECS:
-            raise ValueError(f"Unknown passport type: {passport_type}")
-        
-        spec = PASSPORT_SPECS[passport_type]
-        sheet_spec = PHOTO_SHEET_SPECS
-        layout = spec["sheet_layout"]
+        # Use custom dimensions if manual crop data is provided
+        if manual_crop_data and 'target_width_px' in manual_crop_data:
+            # Custom photo dimensions
+            photo_width = manual_crop_data['target_width_px']
+            photo_height = manual_crop_data['target_height_px']
+            custom_info = manual_crop_data.get('custom_size', {})
+            
+            # Calculate how many photos can fit on standard 10×15cm sheet
+            sheet_spec = PHOTO_SHEET_SPECS
+            available_width = sheet_spec["width_px"] - 2 * sheet_spec["margin_px"]
+            available_height = sheet_spec["height_px"] - 2 * sheet_spec["margin_px"]
+            
+            # Calculate layout automatically based on photo size
+            cols = max(1, available_width // (photo_width + 10))  # 10px minimum spacing
+            rows = max(1, available_height // (photo_height + 10))
+            
+            layout = {"cols": cols, "rows": rows, "count": cols * rows}
+            
+            st.info(f"📋 **Custom Layout:** {cols}×{rows} grid = {layout['count']} photos per sheet")
+            st.info(f"🎯 **Photo Size:** {custom_info.get('width', '?')}×{custom_info.get('height', '?')} {custom_info.get('unit', 'px')}")
+            
+        else:
+            # Standard passport specifications
+            if passport_type not in PASSPORT_SPECS:
+                raise ValueError(f"Unknown passport type: {passport_type}")
+            
+            spec = PASSPORT_SPECS[passport_type]
+            layout = spec["sheet_layout"]
+            
+            # Handle EU photo rotation (35×45mm rotated to fit better in 2×4 layout)
+            if passport_type.startswith("EU"):
+                # Rotate EU photos 90 degrees clockwise to fit better in 2×4 layout
+                passport_image_pil = passport_image_pil.rotate(-90, expand=True)
+                photo_width = spec["height_px"]  # 531px (was height, now width)
+                photo_height = spec["width_px"]  # 413px (was width, now height)
+            else:
+                photo_width = spec["width_px"]
+                photo_height = spec["height_px"]
         
         # Create white background sheet
+        sheet_spec = PHOTO_SHEET_SPECS
         sheet = Image.new("RGB", (sheet_spec["width_px"], sheet_spec["height_px"]), "white")
         
-        # Handle EU photo rotation (35×45mm rotated to fit better in 2×4 layout)
+        # Prepare photo to paste
         photo_to_paste = passport_image_pil.copy()
-        if passport_type.startswith("EU"):
-            # Rotate EU photos 90 degrees clockwise to fit better in 2×4 layout
-            photo_to_paste = photo_to_paste.rotate(-90, expand=True)
-            # After rotation: width becomes height, height becomes width
-            photo_width = spec["height_px"]  # 531px (was height, now width)
-            photo_height = spec["width_px"]  # 413px (was width, now height)
-        else:
-            photo_width = spec["width_px"]
-            photo_height = spec["height_px"]
         
         # Calculate available space for photos (excluding margins)
         available_width = sheet_spec["width_px"] - 2 * sheet_spec["margin_px"]
@@ -494,6 +607,9 @@ def process_image(image, processing_type, **kwargs):
         st.write(f"🔄 Starting {processing_type} processing...")
         result_image = image.copy()
         
+        # Get manual crop data if provided
+        manual_crop_data = kwargs.get('manual_crop_data', None)
+        
         st.write("🔍 Detecting faces...")
         faces = detect_faces(result_image)
         st.write(f"✅ Found {len(faces)} face(s)")
@@ -514,7 +630,24 @@ def process_image(image, processing_type, **kwargs):
         elif processing_type == "crop_face":
             st.write("✂️ Cropping to passport size...")
             passport_type = kwargs.get('passport_type', 'US')
-            result_image = crop_to_passport_size(result_image, passport_type, faces)
+            
+            # Step 1: Cropping
+            if manual_crop_data:
+                st.write("📐 Using manual crop coordinates...")
+                result_image = apply_manual_crop(result_image, manual_crop_data)
+                
+                # Step 2: Resizing - use custom dimensions if provided
+                if 'target_width_px' in manual_crop_data and 'target_height_px' in manual_crop_data:
+                    st.write("📏 Resizing to custom dimensions...")
+                    target_width = manual_crop_data['target_width_px']
+                    target_height = manual_crop_data['target_height_px']
+                    resize_method = manual_crop_data.get('resize_method', 'crop')
+                    result_image = resize_to_target_dimensions(result_image, target_width, target_height, method=resize_method)
+                else:
+                    st.warning("⚠️ Manual crop enabled but no custom dimensions specified. Using cropped image as-is.")
+            else:
+                # Use automatic face detection cropping and standard passport size
+                result_image = crop_to_passport_size(result_image, passport_type, faces)
             
         elif processing_type == "passport_photo":
             st.write("📋 Creating complete passport photo...")
@@ -524,13 +657,38 @@ def process_image(image, processing_type, **kwargs):
             st.write("🎨 Refilling background...")
             bg_color = kwargs.get('background_color', 'white')
             result_image = refill_background(result_image, bg_color)
+            
             st.write("✂️ Cropping to passport size...")
             passport_type = kwargs.get('passport_type', 'US')
-            result_image = crop_to_passport_size(result_image, passport_type, faces)
+            
+            # Step 1: Cropping
+            if manual_crop_data:
+                st.write("📐 Using manual crop coordinates...")
+                result_image = apply_manual_crop(result_image, manual_crop_data)
+                
+                # Step 2: Resizing - use custom dimensions if provided
+                if 'target_width_px' in manual_crop_data and 'target_height_px' in manual_crop_data:
+                    st.write("📏 Resizing to custom dimensions...")
+                    target_width = manual_crop_data['target_width_px']
+                    target_height = manual_crop_data['target_height_px']
+                    resize_method = manual_crop_data.get('resize_method', 'crop')
+                    result_image = resize_to_target_dimensions(result_image, target_width, target_height, method=resize_method)
+                    
+                    # Use custom DPI for photo sheet if available
+                    if 'target_dpi' in manual_crop_data:
+                        custom_dpi = manual_crop_data['target_dpi']
+                        # Store custom DPI in kwargs for photo sheet creation
+                        kwargs['custom_dpi'] = custom_dpi
+                else:
+                    st.warning("⚠️ Manual crop enabled but no custom dimensions specified. Using cropped image as-is.")
+            else:
+                # Use automatic face detection cropping and standard passport size
+                result_image = crop_to_passport_size(result_image, passport_type, faces)
             
             # Always create photo sheet for passport photos
             st.write("📄 Creating photo sheet...")
-            sheet_image = create_photo_sheet(result_image, passport_type)
+            # Pass manual crop data to photo sheet creation for custom layouts
+            sheet_image = create_photo_sheet(result_image, passport_type, manual_crop_data)
         
         st.write("✅ Processing completed!")
         return result_image, faces, sheet_image
@@ -556,7 +714,16 @@ def main():
         3. **✂️ Crop to Passport Size**: Crops image to passport dimensions using AI face detection
         4. **📋 Complete Passport Photo**: Full processing + creates printable photo sheet (recommended)
         
-        ### 📸 Supported Passport Types:
+        ### ✂️ Manual Crop Zone:
+        **🎯 Define Your Own Passport Size** - When using "Crop to Passport Size" or "Complete Passport Photo":
+        - ✅ **Enable Manual Crop Zone** checkbox to unlock custom dimensions
+        - 📏 **Set any size**: Width × Height in inches, cm, or pixels
+        - 🎚️ **Choose DPI**: 72-1200 DPI (300 DPI recommended for printing)
+        - 🔄 **Resize method**: Crop (recommended), Fill, or Fit
+        - 🎪 **Interactive cropping**: Drag and resize the crop frame on your image
+        - 📋 **Auto layout**: Automatically calculates how many photos fit per sheet
+        
+        ### 📸 Standard Passport Types (when manual crop disabled):
         - **US**: 2×2 inch (600×600px @ 300 DPI) - 2 photos per sheet
         - **EU**: 35×45 mm (413×531px @ 300 DPI) - 8 photos per sheet  
         - **Vietnam**: 40×60 mm (472×709px @ 300 DPI) - 4 photos per sheet
@@ -570,8 +737,18 @@ def main():
         - Ensure good lighting and clear face visibility
         - Face should be centered and looking straight at camera
         - Background removal works best with contrasting backgrounds
+        - **Manual crop gives you full control** - perfect for specific requirements
+        - Use "Crop" resize method to maintain compliance and avoid distortion
         - Photo sheets are optimized for 10×15cm professional printing
         - For passport photos, always use "Complete Passport Photo" option
+        
+        ### 🚀 Quick Start with Custom Size:
+        1. Upload your image
+        2. Select "Complete Passport Photo" 
+        3. ✅ Check "Enable Manual Crop Zone"
+        4. 📏 Enter your desired dimensions (e.g., 3×4 cm)
+        5. 🎪 Adjust the crop frame on your image
+        6. 🚀 Click "Process Image"
         """)
     
     # Sidebar for settings
@@ -682,8 +859,161 @@ def main():
                 # Image info
                 st.info(f"📊 **Image Info:** {original_image.width}×{original_image.height}px, {original_image.mode}")
                 
+                # Store image in session state for cropper
+                st.session_state.current_image = original_image
+                st.session_state.uploaded_image_info = {
+                    'width': original_image.width,
+                    'height': original_image.height
+                }
+                
+                # Manual crop option for crop_face and passport_photo
+                manual_crop_enabled = False
+                manual_crop_data = None
+                
+                if processing_type in ["crop_face", "passport_photo"]:
+                    st.markdown("---")
+                    manual_crop_enabled = st.checkbox(
+                        "✂️ Enable Manual Crop Zone", 
+                        value=False,
+                        help="Enable interactive crop zone to manually select the area before processing"
+                    )
+                    
+                    if manual_crop_enabled and CROPPER_AVAILABLE:
+                        st.markdown("**🎯 Interactive Crop Zone**")
+                        st.markdown("*Drag to move, resize corners/edges to adjust crop area*")
+                        
+                        # Custom passport size options for manual crop
+                        st.markdown("**📏 Custom Photo Size**")
+                        col_size1, col_size2, col_size3 = st.columns([1, 1, 1])
+                        
+                        with col_size1:
+                            custom_width = st.number_input(
+                                "Width", 
+                                min_value=0.1, 
+                                max_value=50.0, 
+                                value=2.0, 
+                                step=0.1,
+                                help="Photo width"
+                            )
+                        
+                        with col_size2:
+                            custom_height = st.number_input(
+                                "Height", 
+                                min_value=0.1, 
+                                max_value=50.0, 
+                                value=2.0, 
+                                step=0.1,
+                                help="Photo height"
+                            )
+                        
+                        with col_size3:
+                            custom_unit = st.selectbox(
+                                "Unit",
+                                options=["inch", "cm", "pixel"],
+                                index=0,
+                                help="Measurement unit"
+                            )
+                        
+                        # Custom DPI for physical units
+                        if custom_unit != "pixel":
+                            custom_dpi = st.number_input(
+                                "DPI (Dots Per Inch)", 
+                                min_value=72, 
+                                max_value=1200, 
+                                value=300, 
+                                step=25,
+                                help="Resolution for print quality (300 DPI recommended for professional printing)"
+                            )
+                        else:
+                            custom_dpi = 300  # Default DPI for pixel-based sizes
+                        
+                        # Resize method selection
+                        resize_method = st.selectbox(
+                            "Resize Method",
+                            options=["crop", "fill", "fit"],
+                            index=0,
+                            help="Crop: preserve aspect ratio (may crop excess) - RECOMMENDED for compliance • Fill: stretch to exact size (may distort) • Fit: preserve aspect ratio (may add padding)"
+                        )
+                        
+                        # Calculate target pixel dimensions for aspect ratio
+                        if custom_unit == "inch":
+                            target_width_px = int(custom_width * custom_dpi)
+                            target_height_px = int(custom_height * custom_dpi)
+                        elif custom_unit == "cm":
+                            # Convert cm to inches then to pixels
+                            target_width_px = int(custom_width / 2.54 * custom_dpi)
+                            target_height_px = int(custom_height / 2.54 * custom_dpi)
+                        else:  # pixel
+                            target_width_px = int(custom_width)
+                            target_height_px = int(custom_height)
+                        
+                        # Show calculated dimensions
+                        st.info(f"📊 **Target Size:** {target_width_px}×{target_height_px}px @ {custom_dpi} DPI")
+                        
+                        # Calculate aspect ratio for cropper (width, height)
+                        aspect_ratio = (target_width_px, target_height_px)
+                        
+                        # Pre-resize image to fit container width (streamlit-cropper default is 700px max)
+                        # We want it to fit in the column, so use approximately 400px max width
+                        display_image = original_image.copy()
+                        max_display_width = 400  # Approximate column width
+                        
+                        if display_image.width > max_display_width:
+                            ratio = max_display_width / display_image.width
+                            new_height = int(display_image.height * ratio)
+                            display_image = display_image.resize((max_display_width, new_height), Image.Resampling.LANCZOS)
+                        
+                        # Calculate scale factors for coordinate conversion
+                        scale_x = original_image.width / display_image.width
+                        scale_y = original_image.height / display_image.height
+                        
+                        # Create the interactive cropper with the pre-resized image
+                        cropped_img = st_cropper(
+                            display_image,  # Use pre-resized image
+                            realtime_update=True,
+                            box_color='#3b82f6',
+                            aspect_ratio=aspect_ratio,  # Lock to custom aspect ratio
+                            return_type='box',
+                            should_resize_image=False,  # Don't resize again since we already did it
+                            key='manual_cropper'
+                        )
+                        
+                        if cropped_img:
+                            # Scale coordinates back to original image size
+                            manual_crop_data = {
+                                'x': int(cropped_img['left'] * scale_x),
+                                'y': int(cropped_img['top'] * scale_y),
+                                'width': int(cropped_img['width'] * scale_x),
+                                'height': int(cropped_img['height'] * scale_y),
+                                # Store custom size info for processing
+                                'target_width_px': target_width_px,
+                                'target_height_px': target_height_px,
+                                'target_dpi': custom_dpi,
+                                'resize_method': resize_method,
+                                'custom_size': {
+                                    'width': custom_width,
+                                    'height': custom_height,
+                                    'unit': custom_unit,
+                                    'dpi': custom_dpi
+                                }
+                            }
+                            
+                            # Show crop info
+                            crop_area_percentage = (manual_crop_data['width'] * manual_crop_data['height']) / (original_image.width * original_image.height) * 100
+                            st.success(f"✂️ **Crop Area:** {manual_crop_data['width']}×{manual_crop_data['height']}px at ({manual_crop_data['x']}, {manual_crop_data['y']})")
+                            st.info(f"📏 **Coverage:** {crop_area_percentage:.1f}% of original image")
+                            st.info(f"🎯 **Will resize to:** {target_width_px}×{target_height_px}px ({custom_width}×{custom_height} {custom_unit})")
+                    
+                    elif manual_crop_enabled and not CROPPER_AVAILABLE:
+                        st.warning("⚠️ Interactive cropping not available. Install streamlit-cropper for this feature.")
+                        manual_crop_enabled = False
+                
                 # Process button
                 if st.button("🚀 Process Image", type="primary"):
+                    # Generate timestamp at processing time for consistent naming
+                    processing_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    st.session_state.download_timestamp = processing_timestamp
+                    
                     with st.spinner("Processing image..."):
                         try:
                             processed_image, faces, sheet_image = process_image(
@@ -691,7 +1021,8 @@ def main():
                                 processing_type,
                                 background_color=bg_color,
                                 passport_type=passport_type,
-                                create_sheet=create_sheet
+                                create_sheet=create_sheet,
+                                manual_crop_data=manual_crop_data if manual_crop_enabled else None
                             )
                             
                             # Store results in session state
@@ -700,6 +1031,7 @@ def main():
                             st.session_state.processing_type = processing_type
                             st.session_state.passport_type = passport_type  # Store passport type for DPI
                             st.session_state.sheet_image = sheet_image
+                            st.session_state.manual_crop_data = manual_crop_data if manual_crop_enabled else None  # Store manual crop info
                             st.success("✅ Image processed successfully!")
                             
                         except Exception as proc_error:
@@ -724,8 +1056,6 @@ def main():
             # Face detection info
             if faces:
                 st.success(f"✅ {len(faces)} face(s) detected")
-                for i, face in enumerate(faces):
-                    st.write(f"Face {i+1}: {face['width']}×{face['height']}px, confidence: {face['confidence']:.2f}")
             else:
                 st.warning("⚠️ No faces detected")
             
@@ -739,7 +1069,9 @@ def main():
                 img_byte_arr = save_image_with_dpi(processed_image, format='JPEG', dpi=spec_dpi, quality=95)
                 file_ext = "jpg"
             
-            filename = f"passport_single_{stored_passport_type}.{file_ext}"
+            # Use the stored timestamp for consistent naming
+            timestamp = getattr(st.session_state, 'download_timestamp', datetime.now().strftime("%Y%m%d_%H%M%S"))
+            filename = f"id_photo-{timestamp}-single.{file_ext}"
             
             st.download_button(
                 label="📥 Download Single Photo",
@@ -759,7 +1091,9 @@ def main():
                 sheet_dpi = PHOTO_SHEET_SPECS['dpi']
                 sheet_byte_arr = save_image_with_dpi(sheet_image, format='JPEG', dpi=sheet_dpi, quality=95)
                 
-                sheet_filename = f"passport_sheet_{stored_passport_type}.jpg"
+                # Use the same timestamp for consistent naming
+                timestamp = getattr(st.session_state, 'download_timestamp', datetime.now().strftime("%Y%m%d_%H%M%S"))
+                sheet_filename = f"id_photo-{timestamp}-sheet.jpg"
                 
                 st.download_button(
                     label="📥 Download Photo Sheet",
@@ -771,19 +1105,48 @@ def main():
             
             # Image specifications
             if st.session_state.processing_type in ["crop_face", "passport_photo"]:
-                spec = PASSPORT_SPECS[stored_passport_type]
-                # Determine size display format
-                if 'width_mm' in spec:
-                    size_display = f"{spec['width_mm']}×{spec['height_mm']} mm"
-                else:
-                    size_display = f"{spec['width_inch']}×{spec['height_inch']} inch"
+                # Check if manual crop was used
+                stored_manual_crop = getattr(st.session_state, 'manual_crop_data', None)
                 
-                st.info(f"""
-                **📏 Passport Specifications:**
-                - Size: {size_display}
-                - Resolution: {spec['width_px']}×{spec['height_px']}px @ {spec['dpi']} DPI
-                - Photos per sheet: {spec['sheet_layout']['count']}
-                """)
+                if stored_manual_crop and 'custom_size' in stored_manual_crop:
+                    # Display user-defined dimensions from manual crop
+                    custom_size = stored_manual_crop['custom_size']
+                    custom_width = custom_size['width']
+                    custom_height = custom_size['height']
+                    custom_unit = custom_size['unit']
+                    custom_dpi = custom_size['dpi']
+                    target_width_px = stored_manual_crop['target_width_px']
+                    target_height_px = stored_manual_crop['target_height_px']
+                    
+                    # Calculate photos per sheet for custom size
+                    sheet_spec = PHOTO_SHEET_SPECS
+                    available_width = sheet_spec["width_px"] - 2 * sheet_spec["margin_px"]
+                    available_height = sheet_spec["height_px"] - 2 * sheet_spec["margin_px"]
+                    cols = max(1, available_width // (target_width_px + 10))
+                    rows = max(1, available_height // (target_height_px + 10))
+                    photos_per_sheet = cols * rows
+                    
+                    st.info(f"""
+                    **📏 Passport Specifications:**
+                    - Size: {custom_width}×{custom_height} {custom_unit}
+                    - Resolution: {target_width_px}×{target_height_px}px @ {custom_dpi} DPI
+                    - Photos per sheet: {photos_per_sheet}
+                    """)
+                else:
+                    # Display standard passport specifications
+                    spec = PASSPORT_SPECS[stored_passport_type]
+                    # Determine size display format
+                    if 'width_mm' in spec:
+                        size_display = f"{spec['width_mm']}×{spec['height_mm']} mm"
+                    else:
+                        size_display = f"{spec['width_inch']}×{spec['height_inch']} inch"
+                    
+                    st.info(f"""
+                    **📏 Passport Specifications:**
+                    - Size: {size_display}
+                    - Resolution: {spec['width_px']}×{spec['height_px']}px @ {spec['dpi']} DPI
+                    - Photos per sheet: {spec['sheet_layout']['count']}
+                    """)
         else:
             st.info("👆 Upload an image and click 'Process Image' to see results here")
 
