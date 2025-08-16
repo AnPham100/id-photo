@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageOps
 import pillow_heif
 import io
 import rembg
+import mediapipe as mp
 
 # Import cv2 with error handling for cloud deployment
 try:
@@ -15,12 +16,6 @@ except ImportError as e:
     st.warning("⚠️ OpenCV not available. Some advanced features may be limited.")
     CV2_AVAILABLE = False
     cv2 = None
-
-import mediapipe as mp
-import json
-import base64
-from typing import Optional
-import os
 
 # Register HEIF support with Pillow
 pillow_heif.register_heif_opener()
@@ -34,14 +29,7 @@ def format_passport_option(key, spec):
     }
     flag = country_flags.get(key, "🌍")
     
-    # Add size information for better UX
     name = spec['name']
-    if 'width_mm' in spec and 'height_mm' in spec:
-        size_info = f" ({spec['width_mm']}×{spec['height_mm']}mm)"
-    elif 'width_inch' in spec and 'height_inch' in spec:
-        size_info = f" ({spec['width_inch']}×{spec['height_inch']}″)"
-    else:
-        size_info = ""
     
     return f"{flag} {name}"
 
@@ -58,7 +46,6 @@ def format_color_option(color_key, color_value):
         return "🎨 Custom"
     
     # Get the color hex value and name
-    hex_color = color_map.get(color_key, "#FFFFFF")
     color_name = color_key.replace('_', ' ').title()
     
     # Use color block emoji that closely matches the actual color
@@ -212,8 +199,8 @@ def detect_faces(image):
         st.error(f"Face detection error: {str(e)}")
         return []
 
-def remove_background(image):
-    """Remove background from image"""
+def remove_background(image, tight_crop=True):
+    """Remove background from image with sharp cut option"""
     try:
         # Convert PIL to bytes
         img_byte_arr = io.BytesIO()
@@ -224,7 +211,45 @@ def remove_background(image):
         output = rembg.remove(img_byte_arr)
         
         # Convert back to PIL
-        return Image.open(io.BytesIO(output))
+        result = Image.open(io.BytesIO(output))
+        
+        # Apply sharp cut post-processing if CV2 is available
+        if tight_crop and is_cv2_available():
+            try:
+                # Convert to numpy array for processing
+                output_array = np.array(result)
+                if len(output_array.shape) == 3 and output_array.shape[2] == 4:
+                    # Extract alpha channel
+                    alpha = output_array[:, :, 3]
+                    
+                    # Apply morphological operations to create sharp cuts
+                    # Create a small kernel for precise operations
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+                    
+                    # Apply threshold to create sharp binary mask (remove soft edges)
+                    _, alpha_binary = cv2.threshold(alpha, 128, 255, cv2.THRESH_BINARY)
+                    
+                    # Use closing to fill small gaps in the mask
+                    alpha_closed = cv2.morphologyEx(alpha_binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+                    
+                    # Apply slight erosion to tighten the mask and remove fuzzy edges
+                    alpha_tight = cv2.erode(alpha_closed, kernel, iterations=1)
+                    
+                    # Apply opening to remove small noise
+                    alpha_clean = cv2.morphologyEx(alpha_tight, cv2.MORPH_OPEN, kernel, iterations=1)
+                    
+                    # Final threshold to ensure completely sharp edges (no anti-aliasing)
+                    _, alpha_sharp = cv2.threshold(alpha_clean, 200, 255, cv2.THRESH_BINARY)
+                    
+                    # Update the alpha channel with sharp cut
+                    output_array[:, :, 3] = alpha_sharp
+                    result = Image.fromarray(output_array, 'RGBA')
+                    
+            except Exception as cv_error:
+                st.warning(f"⚠️ Could not apply sharp cutting: {cv_error}")
+                # Continue with original result if sharp cut processing fails
+        
+        return result
     except Exception as e:
         st.error(f"Background removal error: {str(e)}")
         return image
@@ -375,16 +400,6 @@ def crop_to_passport_size(image, passport_type, faces=None):
         resized = cropped.resize((target_width, target_height), Image.Resampling.LANCZOS)
         
         return resized
-        
-    except Exception as e:
-        st.error(f"Cropping error: {str(e)}")
-        return image
-        
-        # Crop image
-        cropped = image.crop((crop_left, crop_top, crop_right, crop_bottom))
-        
-        # Resize to exact dimensions
-        return cropped.resize((target_width, target_height), Image.Resampling.LANCZOS)
         
     except Exception as e:
         st.error(f"Cropping error: {str(e)}")
